@@ -1,0 +1,180 @@
+name: Build Debug APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-debug-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Temurin Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify Java environment
+        run: |
+          set -euo pipefail
+          if ! command -v java >/dev/null 2>&1; then
+            echo "ERROR: java command not found in PATH."
+            exit 1
+          fi
+          echo "JAVA_HOME=${JAVA_HOME:-<not set>}"
+          java -version
+          JAVA_VER_LINE="$(java -version 2>&1 | head -n 1)"
+          RAW_VER="$(echo "$JAVA_VER_LINE" | sed -n 's/.*"\([0-9][0-9]*\(\.[0-9]*\)*\).*/\1/p')"
+          if [ -z "$RAW_VER" ]; then
+            echo "ERROR: Unable to detect active Java version from: $JAVA_VER_LINE"
+            exit 1
+          fi
+          MAJOR_VER="$(echo "$RAW_VER" | cut -d'.' -f1)"
+          if [ "$MAJOR_VER" = "1" ]; then
+            MAJOR_VER="$(echo "$RAW_VER" | cut -d'.' -f2)"
+          fi
+          if ! [[ "$MAJOR_VER" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Unable to parse Java major version from: $RAW_VER"
+            exit 1
+          fi
+          echo "Detected Java major version: $MAJOR_VER"
+          if [ "$MAJOR_VER" -lt 17 ]; then
+            echo "ERROR: Java 17 or newer is required, but detected Java $MAJOR_VER."
+            exit 1
+          fi
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Create temporary debug keystore
+        run: |
+          set -euo pipefail
+          KEYTOOL_BIN="${JAVA_HOME:+$JAVA_HOME/bin/}keytool"
+          if ! command -v "$KEYTOOL_BIN" >/dev/null 2>&1; then
+            KEYTOOL_BIN="keytool"
+          fi
+          if [ ! -f ./debug.keystore ]; then
+            "$KEYTOOL_BIN" -genkeypair -v \
+              -keystore ./debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          fi
+          if [ ! -f ./debug.keystore ]; then
+            echo "ERROR: Failed to create temporary ./debug.keystore."
+            exit 1
+          fi
+          echo "Temporary debug keystore verified."
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify debug APK
+        run: |
+          set -euo pipefail
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -e "$APK_PATH" ] || [ ! -f "$APK_PATH" ] || [ ! -s "$APK_PATH" ]; then
+            echo "ERROR: Expected debug APK missing or empty at $APK_PATH"
+            if [ -d "app/build/outputs/apk" ]; then
+              echo "Discovered APK files inside app/build/outputs/apk:"
+              find app/build/outputs/apk -type f -name "*.apk" || true
+            else
+              echo "Directory app/build/outputs/apk does not exist."
+            fi
+            exit 1
+          fi
+          case "$APK_PATH" in
+            *.apk) ;;
+            *)
+              echo "ERROR: File does not have .apk extension: $APK_PATH"
+              exit 1
+              ;;
+          esac
+          echo "Verified debug APK: $APK_PATH ($(wc -c < "$APK_PATH") bytes)"
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Prepare APK release asset
+        id: prepare_asset
+        run: |
+          set -euo pipefail
+          SRC_APK="app/build/outputs/apk/debug/app-debug.apk"
+          TMP_RELEASE_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/jio-panal-release.XXXXXX")"
+          DEST_APK="${TMP_RELEASE_DIR}/app-debug.apk"
+          cp "$SRC_APK" "$DEST_APK"
+          if [ ! -f "$DEST_APK" ] || [ ! -s "$DEST_APK" ]; then
+            echo "ERROR: Prepared release asset is missing or empty at $DEST_APK"
+            exit 1
+          fi
+          echo "asset_path=$DEST_APK" >> "$GITHUB_OUTPUT"
+
+      - name: Publish APK to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_PATH: ${{ steps.prepare_asset.outputs.asset_path }}
+        run: |
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "ERROR: GitHub CLI (gh) is not available."
+            exit 1
+          fi
+          gh --version
+
+          if [ -z "${ASSET_PATH:-}" ] || [ ! -f "$ASSET_PATH" ] || [ ! -s "$ASSET_PATH" ]; then
+            echo "ERROR: Prepared APK release asset is missing or empty."
+            exit 1
+          fi
+          case "$ASSET_PATH" in
+            *.apk) ;;
+            *)
+              echo "ERROR: Prepared release asset does not end in .apk: $ASSET_PATH"
+              exit 1
+              ;;
+          esac
+          ASSET_NAME="$(basename "$ASSET_PATH")"
+          if [ "$ASSET_NAME" != "app-debug.apk" ]; then
+            echo "ERROR: Release asset filename must be exactly app-debug.apk, got: $ASSET_NAME"
+            exit 1
+          fi
+
+          RELEASE_TAG="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          RELEASE_TITLE="Debug APK Build #${GITHUB_RUN_NUMBER}"
+
+          NOTES_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/release-notes.XXXXXX.md")"
+          cat > "$NOTES_FILE" <<EOF
+          This is an automatically generated debug APK built by GitHub Actions.
+
+          - **GitHub Actions Run Number:** ${GITHUB_RUN_NUMBER}
+          - **GitHub Actions Run Attempt:** ${GITHUB_RUN_ATTEMPT}
+          - **Source Commit SHA:** ${GITHUB_SHA}
+          - **Build Type:** Debug APK (intended for testing only; not a Play Store production release)
+          - **Signing:** Signed only with a temporary debug keystore
+          EOF
+
+          gh release create "$RELEASE_TAG" "$ASSET_PATH" \
+            --title "$RELEASE_TITLE" \
+            --notes-file "$NOTES_FILE" \
+            --target "$GITHUB_SHA" \
+            --latest
