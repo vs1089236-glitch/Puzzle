@@ -282,7 +282,11 @@ fun AccountsAndReferralScreen(
                                     putExtra(Intent.EXTRA_TEXT, shareText)
                                     type = "text/plain"
                                 }
-                                context.startActivity(Intent.createChooser(sendIntent, strings.shareInviteBtn))
+                                try {
+                                    context.startActivity(Intent.createChooser(sendIntent, strings.shareInviteBtn))
+                                } catch (_: Exception) {
+                                    copyToClipboard(context, "Referral Code", user.referralCode)
+                                }
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = ElectricEmerald,

@@ -2,5 +2,7 @@
   "name": "Jio Panal",
   "description": "Luxury fintech commission & panel app featuring 15% commission tracking, UPI & QR account activation, real-time notifications, biometric lock, multi-language support, referral system, and a passkey-protected admin control panel.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

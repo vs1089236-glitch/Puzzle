@@ -60,6 +60,10 @@ object BiometricHelper {
             builder.setNegativeButtonText(negativeButtonText)
         }
 
-        prompt.authenticate(builder.build())
+        try {
+            prompt.authenticate(builder.build())
+        } catch (e: Exception) {
+            onError(e.message ?: "Biometric authentication unavailable.")
+        }
     }
 }

@@ -152,15 +152,19 @@ private fun JioPanalRoot(
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
             if (!granted) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                try {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } catch (_: Exception) {
+                }
             }
         }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        val activeUser = currentUser
         if (showSplash) {
             AnimatedSplashReveal(onFinished = { showSplash = false })
-        } else if (currentUser == null) {
+        } else if (activeUser == null) {
             AuthScreen(
                 strings = strings,
                 selectedLanguage = userPrefs.language,
@@ -180,7 +184,7 @@ private fun JioPanalRoot(
                 BiometricHelper.showBiometricPrompt(
                     activity = activity,
                     title = "Jio Panal Security Lock",
-                    subtitle = "Authenticate to access ${currentUser?.gmail}",
+                    subtitle = "Authenticate to access ${activeUser.gmail}",
                     negativeButtonText = strings.unlockWithPin,
                     onSuccess = { viewModel.unlockBiometricSession() },
                     onError = { }
@@ -192,7 +196,7 @@ private fun JioPanalRoot(
                 }
             }
             BiometricLockOverlay(
-                userEmail = currentUser!!.gmail,
+                userEmail = activeUser.gmail,
                 expectedPin = userPrefs.securityPin,
                 biometricAvailable = biometricAvailable,
                 biometricLabel = strings.biometricUnlock,
@@ -201,7 +205,7 @@ private fun JioPanalRoot(
                 onPinSuccess = viewModel::unlockBiometricSession
             )
         } else {
-            val user = currentUser!!
+            val user = activeUser
             val navController = rememberNavController()
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route ?: ROUTE_DASHBOARD
